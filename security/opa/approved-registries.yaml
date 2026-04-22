@@ -1,0 +1,71 @@
+# OPA Gatekeeper Constraint: Only pull images from approved registries.
+# Prevents supply chain attacks via untrusted public images.
+# In a regulated environment you'd also add an internal ECR here.
+---
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: approvedregistries
+  annotations:
+    description: >-
+      Ensures all container images come from a list of approved registries.
+      Prevents supply chain attacks from untrusted third-party registries.
+spec:
+  crd:
+    spec:
+      names:
+        kind: ApprovedRegistries
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            registries:
+              type: array
+              items:
+                type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package approvedregistries
+
+        import future.keywords.contains
+        import future.keywords.if
+
+        # Helper: does image start with an approved prefix?
+        approved if {
+          registry := input.parameters.registries[_]
+          startswith(input.review.object.spec.containers[_].image, registry)
+        }
+
+        violation contains msg if {
+          container := input.review.object.spec.containers[_]
+          not approved_image(container.image)
+          msg := sprintf(
+            "Container %v uses image %v from an unapproved registry.",
+            [container.name, container.image]
+          )
+        }
+
+        approved_image(image) if {
+          registry := input.parameters.registries[_]
+          startswith(image, registry)
+        }
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: ApprovedRegistries
+metadata:
+  name: approved-registries-only
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+      - apiGroups: [apps]
+        kinds: [Deployment, StatefulSet, DaemonSet]
+    namespaces:
+      - devsecops-dev
+      - devsecops-prod
+  parameters:
+    registries:
+      - ghcr.io/akhiladarsh/
+      # Add your private ECR here e.g:
+      # - 123456789.dkr.ecr.us-east-1.amazonaws.com/

@@ -1,0 +1,126 @@
+# ArgoCD Application - Step 6: GitOps
+#
+# This tells ArgoCD to watch the k8s/overlays/prod directory in Git.
+# When it detects a diff between Git state and cluster state (drift),
+# it automatically syncs - no manual kubectl apply needed.
+#
+# The CI pipeline updates the image tag in kustomization.yaml.
+# ArgoCD detects the change and rolls out the new image automatically.
+#
+# Install ArgoCD first:
+#   kubectl create namespace argocd
+#   kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+#   kubectl apply -f argocd/project.yaml
+#   kubectl apply -f argocd/application.yaml
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: devsecops-platform
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  description: DevSecOps Kubernetes Platform project
+  sourceRepos:
+    - https://github.com/akhiladarsh/devsecops-k8s-platform
+  destinations:
+    - namespace: devsecops-prod
+      server: https://kubernetes.default.svc
+    - namespace: devsecops-dev
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+  namespaceResourceWhitelist:
+    - group: apps
+      kind: Deployment
+    - group: ""
+      kind: Service
+    - group: ""
+      kind: ServiceAccount
+    - group: networking.k8s.io
+      kind: NetworkPolicy
+    - group: policy
+      kind: PodDisruptionBudget
+    - group: autoscaling
+      kind: HorizontalPodAutoscaler
+  roles:
+    - name: ci-role
+      description: CI pipeline can sync but not delete
+      policies:
+        - p, proj:devsecops-platform:ci-role, applications, sync, devsecops-platform/*, allow
+      jwtTokens: []
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: devsecops-platform-prod
+  namespace: argocd
+  # Protect from accidental deletion via ArgoCD UI
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  labels:
+    app.kubernetes.io/name: devsecops-platform
+    environment: production
+spec:
+  project: devsecops-platform
+
+  source:
+    repoURL: https://github.com/akhiladarsh/devsecops-k8s-platform
+    targetRevision: main
+    # Point ArgoCD at the prod overlay - Kustomize handles the rest
+    path: k8s/overlays/prod
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: devsecops-prod
+
+  syncPolicy:
+    automated:
+      # Auto-sync when ArgoCD detects drift from Git
+      prune: true        # Remove resources deleted from Git
+      selfHeal: true     # Re-apply if someone kubectl-edits the cluster directly
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+
+  revisionHistoryLimit: 5
+
+  # Health checks ArgoCD uses to determine if sync succeeded
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas  # HPA manages replicas, ignore drift here
+---
+# Dev environment Application
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: devsecops-platform-dev
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: devsecops-platform
+  source:
+    repoURL: https://github.com/akhiladarsh/devsecops-k8s-platform
+    targetRevision: main
+    path: k8s/overlays/dev
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: devsecops-dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

@@ -1,0 +1,36 @@
+# Trivy configuration
+# Docs: https://aquasecurity.github.io/trivy/latest/docs/references/configuration/
+
+# Only fail on vulnerabilities that have a fix available.
+# Unfixed CVEs are noise - you can't act on them yet.
+ignore-unfixed: true
+
+# Severity levels that trigger a build failure
+severity:
+  - CRITICAL
+  - HIGH
+
+# Skip dev/test dependencies that never reach production
+skip-dirs:
+  - .git
+  - .github
+  - docs
+  - "**/__pycache__"
+
+# Vulnerability types to check
+vuln-type:
+  - os
+  - library
+
+# Security checks beyond CVEs
+scanners:
+  - vuln
+  - secret
+  - misconfig
+
+# Secret scanning - prevent accidental credential commits
+secret:
+  config: .trivysecret.yaml
+
+# Output
+format: table

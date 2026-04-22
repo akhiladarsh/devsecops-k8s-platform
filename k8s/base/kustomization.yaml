@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - serviceaccount.yaml
+  - deployment.yaml
+  - service.yaml
+  - networkpolicy.yaml
+
+commonLabels:
+  app.kubernetes.io/part-of: devsecops-k8s-platform
+
+images:
+  - name: ghcr.io/akhiladarsh/devsecops-k8s-platform
+    newTag: latest

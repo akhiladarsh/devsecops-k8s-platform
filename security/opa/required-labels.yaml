@@ -1,0 +1,60 @@
+# OPA Gatekeeper Constraint: Require standard Kubernetes labels.
+# Without consistent labelling you cannot build reliable dashboards,
+# network policies, or cost allocation reports.
+---
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: requiredlabels
+  annotations:
+    description: >-
+      Ensures all Deployments carry required standard labels.
+      Required for cost allocation, incident routing, and OPA policy targeting.
+spec:
+  crd:
+    spec:
+      names:
+        kind: RequiredLabels
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            labels:
+              type: array
+              items:
+                type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package requiredlabels
+
+        import future.keywords.contains
+        import future.keywords.if
+
+        violation contains msg if {
+          required := input.parameters.labels[_]
+          not input.review.object.metadata.labels[required]
+          msg := sprintf(
+            "%v %v is missing required label: %v",
+            [input.review.object.kind, input.review.object.metadata.name, required]
+          )
+        }
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: RequiredLabels
+metadata:
+  name: require-standard-labels
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+      - apiGroups: [apps]
+        kinds: [Deployment]
+    namespaces:
+      - devsecops-dev
+      - devsecops-prod
+  parameters:
+    labels:
+      - app.kubernetes.io/name
+      - app.kubernetes.io/component
+      - app.kubernetes.io/managed-by

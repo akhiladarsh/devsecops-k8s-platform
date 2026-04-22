@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: devsecops-platform-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  devsecops-platform.json: |
+    # Contents of monitoring/grafana/dashboard.json
+    # When grafana_dashboard: "1" label is present, Grafana's sidecar
+    # automatically picks this up and provisions the dashboard.
+    # Replace the line above with the actual JSON content from dashboard.json
+    # when deploying, or use a helm values override to mount it.

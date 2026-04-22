@@ -1,0 +1,109 @@
+# Falco custom rules for production runtime security detection.
+#
+# These rules reflect real concerns from regulated environments.
+# At Baxter we needed to detect unexpected process execution in containers
+# that could indicate a compromise or a misconfigured workload.
+#
+# Falco monitors kernel syscalls via eBPF and fires alerts when behaviour
+# matches these rules. Alerts route to Prometheus alertmanager -> PagerDuty.
+#
+# Docs: https://falco.org/docs/rules/
+
+# Override defaults for our workloads
+- macro: app_containers
+  condition: >-
+    container.image.repository contains "ghcr.io/akhiladarsh/devsecops-k8s-platform"
+
+# Rule 1: Shell spawned inside app container
+# A shell in a running container is almost always an attacker or
+# a developer doing something they shouldn't be.
+- rule: Shell spawned in app container
+  desc: >-
+    Detects a shell process spawned inside the application container.
+    Legitimate applications do not exec shells at runtime.
+    Investigate immediately in regulated environments.
+  condition: >-
+    spawned_process
+    and app_containers
+    and proc.name in (sh, bash, zsh, dash, ksh, fish)
+  output: >-
+    Shell spawned in app container
+    (user=%user.name container=%container.name image=%container.image.repository
+     cmd=%proc.cmdline parent=%proc.pname)
+  priority: CRITICAL
+  tags: [container, shell, T1059]
+
+# Rule 2: Unexpected outbound connection
+# Our NetworkPolicy allows DNS only. Any other outbound connection
+# from the app container is anomalous and could be data exfiltration.
+- rule: Unexpected outbound connection from app container
+  desc: >-
+    App container opened an outbound connection to a non-DNS address.
+    Could indicate C2 communication or data exfiltration.
+  condition: >-
+    outbound
+    and app_containers
+    and not (fd.sport in (53))
+    and not (fd.dport in (53))
+  output: >-
+    Unexpected outbound connection from app container
+    (user=%user.name container=%container.name image=%container.image.repository
+     connection=%fd.name)
+  priority: HIGH
+  tags: [network, exfiltration, T1041]
+
+# Rule 3: Write to read-only filesystem
+# Our Deployment sets readOnlyRootFilesystem: true.
+# A write attempt means either a broken image or active exploitation.
+- rule: Write to root filesystem in app container
+  desc: >-
+    Container with readOnlyRootFilesystem attempted to write outside /tmp.
+    Indicates either a config error or exploitation attempt.
+  condition: >-
+    open_write
+    and app_containers
+    and not (fd.name startswith /tmp/)
+    and not (fd.name startswith /dev/)
+    and not proc.name in (python, python3)
+  output: >-
+    Write to root filesystem in app container
+    (user=%user.name container=%container.name image=%container.image.repository
+     file=%fd.name cmd=%proc.cmdline)
+  priority: WARNING
+  tags: [filesystem, T1222]
+
+# Rule 4: Sensitive file access
+# Reading /etc/shadow, /etc/passwd, or AWS credential files from a container
+# process is a clear indicator of credential harvesting.
+- rule: Sensitive file access in container
+  desc: >-
+    Process in container accessed a sensitive file.
+    Common technique for credential harvesting.
+  condition: >-
+    open_read
+    and app_containers
+    and (
+      fd.name in (/etc/shadow, /etc/passwd, /etc/sudoers)
+      or fd.name startswith /root/.aws
+      or fd.name startswith /root/.ssh
+    )
+  output: >-
+    Sensitive file read in app container
+    (user=%user.name container=%container.name file=%fd.name cmd=%proc.cmdline)
+  priority: HIGH
+  tags: [credential-access, T1552]
+
+# Rule 5: Privilege escalation attempt
+- rule: Privilege escalation attempt
+  desc: >-
+    Process attempted to change user identity via setuid/setgid.
+    Should never occur in our hardened containers.
+  condition: >-
+    app_containers
+    and syscall.type in (setuid, setgid, setreuid, setregid)
+    and user.uid != 0
+  output: >-
+    Privilege escalation syscall in app container
+    (user=%user.name uid=%user.uid container=%container.name cmd=%proc.cmdline)
+  priority: CRITICAL
+  tags: [privilege-escalation, T1548]

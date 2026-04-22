@@ -1,0 +1,133 @@
+# Step 7: Observability - Prometheus configuration
+#
+# Install: helm install monitoring prometheus-community/kube-prometheus-stack -n monitoring --create-namespace
+
+---
+# ConfigMap with scrape config for our app
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-app-scrape
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/managed-by: argocd
+data:
+  scrape.yaml: |
+    scrape_configs:
+      - job_name: devsecops-platform
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - devsecops-prod
+                - devsecops-dev
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+            target_label: app
+---
+# PrometheusRule - alerting rules for our SLOs
+# These fire into Alertmanager which routes to PagerDuty/Slack
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: devsecops-platform-alerts
+  namespace: monitoring
+  labels:
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+    - name: devsecops-platform.slo
+      interval: 30s
+      rules:
+        # SLO: 99.9% availability (allows 43m downtime/month)
+        - alert: HighErrorRate
+          expr: |
+            (
+              sum(rate(http_requests_total{app="devsecops-platform", status=~"5.."}[5m]))
+              /
+              sum(rate(http_requests_total{app="devsecops-platform"}[5m]))
+            ) > 0.001
+          for: 5m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "Error rate above SLO threshold"
+            description: >-
+              Error rate is {{ $value | humanizePercentage }} over the last 5 minutes.
+              SLO budget: 0.1% errors. Action required immediately.
+            runbook_url: https://github.com/akhiladarsh/devsecops-k8s-platform/docs/runbooks/high-error-rate.md
+
+        # SLO: p99 latency under 500ms
+        - alert: HighLatency
+          expr: |
+            histogram_quantile(0.99,
+              sum(rate(http_request_duration_seconds_bucket{app="devsecops-platform"}[5m])) by (le)
+            ) > 0.5
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "p99 latency above 500ms"
+            description: "p99 latency is {{ $value | humanizeDuration }}. SLO is 500ms."
+
+        # Pod availability
+        - alert: PodRestarting
+          expr: |
+            rate(kube_pod_container_status_restarts_total{
+              namespace=~"devsecops.*"
+            }[15m]) * 60 * 15 > 3
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Pod restarting frequently"
+            description: "Pod {{ $labels.pod }} has restarted more than 3 times in 15 minutes."
+
+        # Deployment availability
+        - alert: DeploymentUnavailable
+          expr: |
+            kube_deployment_status_replicas_available{
+              namespace=~"devsecops.*",
+              deployment="devsecops-platform"
+            } < 2
+          for: 2m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "Fewer than 2 replicas available"
+            description: "Only {{ $value }} replicas available. Minimum is 2."
+
+    - name: devsecops-platform.security
+      rules:
+        # Alert when Falco fires a CRITICAL rule
+        - alert: FalcoCriticalAlert
+          expr: |
+            sum(rate(falco_events_total{priority="Critical"}[5m])) > 0
+          for: 0m
+          labels:
+            severity: critical
+            team: security
+          annotations:
+            summary: "Falco detected critical runtime security event"
+            description: "A Falco critical rule fired. Investigate immediately."
