@@ -1,10 +1,7 @@
 # DevSecOps Kubernetes Platform
 
-A full seven-stage delivery pipeline from code commit to production-running container, with security scanning, GitOps sync, and Prometheus observability. Built around the patterns I used running HIPAA-regulated infrastructure at Baxter International.
+A full seven-stage delivery pipeline from code commit to production-running container, with security scanning, GitOps sync, and Prometheus observability. Built around the patterns I used running HIPAA-regulated infrastructure.
 
-![CI](https://github.com/akhiladarsh/devsecops-k8s-platform/actions/workflows/ci.yml/badge.svg)
-![Security Scan](https://github.com/akhiladarsh/devsecops-k8s-platform/actions/workflows/security.yml/badge.svg)
-![License](https://img.shields.io/badge/license-MIT-blue)
 
 ## What this is
 
